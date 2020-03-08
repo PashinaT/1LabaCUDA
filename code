@@ -1,0 +1,121 @@
+
+#include "cuda_runtime.h"
+#include "device_launch_parameters.h"
+
+
+#include <cstdlib>
+#include <stdio.h>
+#include <iostream>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#define BLOCK_SIZE 32
+
+
+
+cudaError_t addWithCuda(int *c, const int *a, const int *b, unsigned int size);
+
+
+__global__ void Mult(float *a, float *b, int n, float *c)
+{
+	int bx = blockIdx.x; // номер блока по x
+	int by = blockIdx.y; // номер блока по y
+	int tx = threadIdx.x; // номер нити в блоке по x
+	int ty = threadIdx.y; // номер нити в блоке по y
+
+	float sum = 0.0f;
+	int ia = n * (BLOCK_SIZE * by + ty); // номер строки из A’
+	int ib = BLOCK_SIZE * bx + tx; // номер столбца из B’
+	int ic = ia + ib; // номер элемента из С’
+					  // вычисление элемента матрицы C
+	for (int k = 0; k < n; k++) { 
+		sum += a[ia + k] * b[ib + k * n];
+	}
+	c[ic] = sum;
+}
+
+int main()
+{
+	int N =2048;
+	int m, n, k;
+	// создание переменных-событий
+	float timerValueGPU, timerValueCPU =0;
+	cudaEvent_t start, stop;
+	cudaEventCreate(&start); cudaEventCreate(&stop);
+	int numBytes = N * N * sizeof(float);
+	float *adev, *bdev, *cdev, *a, *b, *c, *cc;
+	// выделение памяти на host
+	a = (float *)malloc(numBytes); //матрица A
+	b = (float *)malloc(numBytes); //матрица B
+
+	c = (float *)malloc(numBytes); //матрица С для GPU-варианта
+	cc = (float *)malloc(numBytes); //матрица С для CPU-варианта
+
+									// задание матрицы A, B и транспонированной матрицы B
+	for (n = 0; n < N; n++)
+	{
+		for (m = 0; m < N; m++)
+		{
+			a[m + n * N] = 2.0f * m + n; b[m + n * N] = m - n; 
+		}
+	}
+	// задание сетки нитей и блоков
+	dim3 threads(BLOCK_SIZE, BLOCK_SIZE);
+	dim3 blocks(N / threads.x, N / threads.y);
+	// выделение памяти на GPU
+	cudaMalloc((void**)&adev, numBytes);
+	cudaMalloc((void**)&bdev, numBytes);
+	cudaMalloc((void**)&cdev, numBytes);
+
+
+									// ---------------- GPU-вариант ------------------------
+									// копирование матриц A и B с host на device
+	cudaMemcpy(adev, a, numBytes, cudaMemcpyHostToDevice);
+	cudaMemcpy(bdev, b, numBytes, cudaMemcpyHostToDevice);
+	// запуск таймера
+	cudaEventRecord(start, 0);
+	// запуск функции-ядра
+	Mult <<< blocks, threads >>> (adev, bdev, N, cdev);
+	// оценка времени вычисления GPU-варианта
+	cudaThreadSynchronize();
+	cudaEventRecord(stop, 0);
+	cudaEventSynchronize(stop);
+	cudaEventElapsedTime(&timerValueGPU, start, stop);
+	printf("\n GPU calculation time %f msec\n", timerValueGPU);
+	// копирование, вычисленной матрицы C с device на host
+	cudaMemcpy(c, cdev, numBytes, cudaMemcpyDeviceToHost);
+
+	// -------------------- CPU-вариант --------------------
+	// запуск таймера
+	double start_time = clock();
+	// вычисление матрицы C
+	for (int i = 0; i < N; i++) {
+		for (int k = 0; k < N; k++) {
+			for (int j = 0; j < N; j++) {
+				cc[i * N + j] += a[i * N + k] * b[k * N + j];
+			}
+		}
+	}
+	// оценка времени вычисления CPU-варианта
+	double end_time = clock();
+	 timerValueCPU = ((end_time - start_time)) * 1000 / CLOCKS_PER_SEC;
+	
+	printf("\n CPU calculation time %f msec\n", timerValueCPU);
+	printf("\n Rate %f x\n", timerValueCPU / timerValueGPU);
+
+	// освобождение памяти на GPU и CPU
+	cudaFree(adev);
+	cudaFree(bdev);
+	cudaFree(cdev);
+	free(a);
+	free(b);
+	free(c);
+	free(cc);
+	// уничтожение переменных-событий
+	cudaEventDestroy(start);
+	cudaEventDestroy(stop);
+	system("pause");
+	return 0;
+
+}
+
